@@ -1,4 +1,4 @@
-from typing import List, Tuple
+from typing import List, Set, Tuple
 import requests
 import xml.etree.ElementTree as ET
 import dataclasses
@@ -23,13 +23,13 @@ def get_all_recent_listings() -> ET:
     return ET.fromstring(data)
 
 
-def get_ciks_from_xml(xml: ET) -> Tuple[str]:
+def get_ciks_from_xml(xml: ET) -> Set[str]:
     entries = [child for child in xml if child.tag == '{http://www.w3.org/2005/Atom}entry']
     links = [child for entry in entries for child in entry if child.tag == '{http://www.w3.org/2005/Atom}link']
     hrefs = [link.attrib['href'] for link in links]
     ciks: List[str] = [href.split('/')[6] for href in hrefs]
 
-    return tuple(ciks)
+    return set(ciks)
 
 
 def get_potential_spacs_from_cik(cik: str) -> Tuple[SPAC]:
@@ -68,19 +68,19 @@ def is_spac(spac: SPAC) -> bool:
     return b'blank check company' in spac.link_content
         
 
-def add_name_to_spac(spac: SPAC) -> None:
+def get_name_of_spac(spac: SPAC) -> str:
     soup = BeautifulSoup(spac.link_content, 'lxml')
     element = soup.find('p', {'style': 'margin-top:6pt; margin-bottom:0pt; font-size:22pt; font-family:Times New Roman'})
 
     if element is None:
-        return
+        return ''
 
     name = element.text
     name = name.strip().replace('\n', ' ')
-    spac.name = name
+    return name
 
 
-def add_ticker_to_spac(spac: SPAC) -> None:
+def get_ticker_of_spac(spac: SPAC) -> str:
     soup = BeautifulSoup(spac.link_content, 'lxml')
     tickers = []
 
@@ -101,14 +101,9 @@ def add_ticker_to_spac(spac: SPAC) -> None:
             if words[i - 2:i + 1] == ['under', 'the', 'symbol']:
                 tickers.append(words[i + 1][1:-1])
 
-    # for element in elements:
-    #     words = element.split()
-    #     tickers.extend(re.findall('\\x93([^\\x94]+)\\x94', element.text))
-
     tickers.sort(key=len)
 
-    if tickers:
-        spac.ticker = tickers[0]
+    return tickers[0] if tickers else ''
 
 
 def send_post_request(spacs: List[SPAC]) -> None:
@@ -124,21 +119,34 @@ if __name__ == '__main__':
     xml = get_all_recent_listings()
     ciks = get_ciks_from_xml(xml)
 
-    potential_spacs = []
-    actual_spacs = []
+    # cik_potential_spacs = {cik: ) for cik in ciks}
+    final_spacs = []
 
     for cik in ciks:
         spacs = get_potential_spacs_from_cik(cik)
-        potential_spacs.extend(spacs)
+        final_spac = SPAC(name='', ticker='', date='', link='', link_content=b'')
 
-    for spac in potential_spacs:
-        fetch_filing_document(spac)
-        
-        if not is_spac(spac):
-            continue
-        
-        add_name_to_spac(spac)
-        add_ticker_to_spac(spac)
-        actual_spacs.append(spac)
+        for spac in spacs:
+            fetch_filing_document(spac)
 
-    send_post_request(actual_spacs)
+            if not is_spac(spac):
+                continue
+
+            name = get_name_of_spac(spac)
+            if name and not final_spac.name:
+                final_spac.name = name
+
+            ticker = get_ticker_of_spac(spac)
+            if ticker and not final_spac.ticker:
+                final_spac.ticker = ticker
+
+            if spac.date and not final_spac.date:
+                final_spac.date = spac.date
+
+            if spac.link and not final_spac.link:
+                final_spac.link = spac.link
+
+        if final_spac.name and final_spac.ticker:
+            final_spacs.append(final_spac)
+
+    send_post_request(final_spacs)
